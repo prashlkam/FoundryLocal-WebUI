@@ -1,0 +1,7 @@
+{
+  "name": "FoundryLocal WebUI",
+  "description": "A full-stack capable AI chat application interface featuring RAG support, multi-model management, and a robust chat experience.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
