@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { ChatInterface } from './components/ChatInterface';
 import { SettingsModal } from './components/SettingsModal';
 import { checkConnection, streamChat, getModels, initializeFoundry } from './services/foundryService';
+import { checkOllamaConnection, getOllamaModels, streamOllamaChat } from './services/ollamaService';
 import { streamGeminiResponse, getGeminiModels } from './services/geminiService';
 import { ChatSession, User, Message, Role, Model, AppSettings } from './types';
-import { BrainCircuit, Loader2, Wifi, WifiOff, Zap, AlertTriangle, Download, Terminal, Copy, CheckCircle2 } from 'lucide-react';
+import { BrainCircuit, Loader2, Wifi, WifiOff, Zap, AlertTriangle, Download, Terminal, Copy, CheckCircle2, Box } from 'lucide-react';
 
 // --- Connection Component ---
 const ConnectPage = ({ 
@@ -20,73 +20,71 @@ const ConnectPage = ({
 }) => {
   const [modelAlias, setModelAlias] = useState('qwen2.5-coder-0.5b');
   const [customUrl, setCustomUrl] = useState('http://127.0.0.1:8000/v1');
+  const [ollamaUrl, setOllamaUrl] = useState('http://127.0.0.1:11434');
   const [loading, setLoading] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState('');
-  const [mode, setMode] = useState<'auto' | 'manual'>('auto');
+  const [mode, setMode] = useState<'foundry' | 'ollama' | 'manual'>('foundry');
   const [localServerStatus, setLocalServerStatus] = useState<'checking' | 'found' | 'not-found'>('checking');
 
   // Proactively check for local server on mount
   useEffect(() => {
     const checkLocal = async () => {
-      const isUp = await checkConnection('http://127.0.0.1:8000/v1', 1500);
-      setLocalServerStatus(isUp ? 'found' : 'not-found');
+      const isFoundryUp = await checkConnection('http://127.0.0.1:8000/v1', 1000);
+      const isOllamaUp = await checkOllamaConnection('http://127.0.0.1:11434');
+      setLocalServerStatus(isFoundryUp || isOllamaUp ? 'found' : 'not-found');
+      if (isOllamaUp && !isFoundryUp) setMode('ollama');
     };
     checkLocal();
   }, []);
 
-  const handleAutoConnect = async (e: React.FormEvent) => {
+  const handleConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
-    setStatusMsg('Searching for Foundry Local...');
     
     try {
-      const { endpoint, modelInfo } = await initializeFoundry(modelAlias);
-      setStatusMsg('Connection Established!');
+      if (mode === 'foundry') {
+        setStatusMsg('Initializing Foundry...');
+        const { endpoint, modelInfo } = await initializeFoundry(modelAlias);
+        onUpdateSettings({ 
+          ...settings, 
+          foundryUrl: endpoint,
+          defaultModel: modelInfo.id,
+          activeProvider: 'foundry'
+        });
+      } else if (mode === 'ollama') {
+        setStatusMsg('Checking Ollama...');
+        const isUp = await checkOllamaConnection(ollamaUrl);
+        if (!isUp) throw new Error(`Ollama at ${ollamaUrl} is unreachable.`);
+        onUpdateSettings({ 
+          ...settings, 
+          ollamaUrl: ollamaUrl,
+          activeProvider: 'ollama'
+        });
+      } else {
+        setStatusMsg('Checking Manual Connection...');
+        const validUrl = await checkConnection(customUrl);
+        if (!validUrl) throw new Error(`Server at ${customUrl} is unreachable.`);
+        onUpdateSettings({ 
+          ...settings, 
+          foundryUrl: validUrl,
+          activeProvider: 'foundry'
+        });
+      }
       
-      onUpdateSettings({ 
-        ...settings, 
-        foundryUrl: endpoint,
-        defaultModel: modelInfo.id 
-      });
-
       onConnect({ id: 'local-admin', username: 'User', role: 'admin' });
     } catch (e: any) {
-      const errMsg = e.message || e.toString();
-      if (errMsg.includes("installed") || errMsg.includes("PATH")) {
-        setError("Foundry CLI is not installed. You can install it via NPM or connect to a manual server.");
-      } else {
-        setError(errMsg || "Connection failed.");
-      }
+      setError(e.message || "Connection failed.");
     } finally {
       setLoading(false);
       setStatusMsg('');
     }
   };
 
-  const handleManualConnect = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setLoading(true);
-    setError('');
-    
-    try {
-      const validUrl = await checkConnection(customUrl);
-      if (!validUrl) throw new Error(`Server at ${customUrl} is unreachable.`);
-
-      onUpdateSettings({ ...settings, foundryUrl: validUrl });
-      onConnect({ id: 'local-admin', username: 'User', role: 'admin' });
-    } catch (e: any) {
-      setError(e.message);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center p-4">
        <div className="w-full max-w-md bg-gray-900 border border-gray-800 p-8 rounded-2xl shadow-2xl relative overflow-hidden">
-          {/* Status Indicator Bar */}
           <div className="absolute top-0 left-0 right-0 h-1 bg-gray-800">
              <div className={`h-full transition-all duration-1000 ${
                localServerStatus === 'found' ? 'w-full bg-green-500' : 
@@ -103,96 +101,59 @@ const ConnectPage = ({
           <h2 className="text-2xl font-bold text-center text-white mb-1">FoundryLocal</h2>
           <div className="flex items-center justify-center gap-2 mb-8">
             {localServerStatus === 'checking' && <span className="text-[10px] text-gray-500 flex items-center gap-1"><Loader2 size={10} className="animate-spin" /> Checking local status...</span>}
-            {localServerStatus === 'found' && <span className="text-[10px] text-green-500 font-bold flex items-center gap-1"><CheckCircle2 size={10} /> Local Server Detected</span>}
-            {localServerStatus === 'not-found' && <span className="text-[10px] text-gray-600 flex items-center gap-1"><WifiOff size={10} /> No local server found</span>}
+            {localServerStatus === 'found' && <span className="text-[10px] text-green-500 font-bold flex items-center gap-1"><CheckCircle2 size={10} /> Local Engine Detected</span>}
+            {localServerStatus === 'not-found' && <span className="text-[10px] text-gray-600 flex items-center gap-1"><WifiOff size={10} /> No local engine found</span>}
           </div>
           
           {error && (
-            <div className="mb-6 bg-red-900/10 border border-red-800/50 rounded-xl overflow-hidden">
-               <div className="p-3 text-red-300 text-xs flex gap-3 items-start">
-                  <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" /> 
-                  <p>{error}</p>
-               </div>
-               {(error.includes("installed") || error.includes("PATH")) && (
-                 <div className="bg-black/40 p-3 flex flex-col gap-2 border-t border-red-800/20">
-                    <div className="flex items-center justify-between">
-                       <span className="text-[10px] font-mono text-gray-400">npm install -g foundry-local</span>
-                       <button 
-                         onClick={() => navigator.clipboard.writeText('npm install -g foundry-local')}
-                         className="p-1 hover:bg-white/10 rounded transition-colors"
-                       >
-                         <Copy size={12} className="text-gray-400 hover:text-white" />
-                       </button>
-                    </div>
-                 </div>
-               )}
+            <div className="mb-6 bg-red-900/10 border border-red-800/50 rounded-xl overflow-hidden p-3 text-red-300 text-xs flex gap-3 items-start">
+              <AlertTriangle size={16} className="flex-shrink-0 mt-0.5" /> 
+              <p>{error}</p>
             </div>
           )}
 
-          {/* Mode Toggles */}
           <div className="flex bg-black/40 rounded-xl p-1 mb-6 border border-gray-800">
-             <button 
-               onClick={() => setMode('auto')}
-               className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${mode === 'auto' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-             >
-               Automatic
-             </button>
-             <button 
-               onClick={() => setMode('manual')}
-               className={`flex-1 py-2 rounded-lg text-xs font-semibold transition-all ${mode === 'manual' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}
-             >
-               Manual URL
-             </button>
+             <button onClick={() => setMode('foundry')} className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${mode === 'foundry' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Foundry</button>
+             <button onClick={() => setMode('ollama')} className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${mode === 'ollama' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Ollama</button>
+             <button onClick={() => setMode('manual')} className={`flex-1 py-2 rounded-lg text-[10px] font-bold uppercase transition-all ${mode === 'manual' ? 'bg-gray-800 text-white shadow-sm' : 'text-gray-500 hover:text-gray-300'}`}>Custom</button>
           </div>
 
-          {mode === 'auto' ? (
-             <form onSubmit={handleAutoConnect} className="space-y-4">
+          <form onSubmit={handleConnect} className="space-y-4">
+             {mode === 'foundry' && (
                <div className="space-y-1">
                   <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Preferred Model</label>
                   <div className="relative">
-                    <input 
-                      type="text" 
-                      value={modelAlias}
-                      onChange={e => setModelAlias(e.target.value)}
-                      className="w-full bg-black/50 border border-gray-800 rounded-xl p-3.5 text-white focus:ring-2 focus:ring-brand-500/50 outline-none font-mono text-sm transition-all"
-                      placeholder="model-alias"
-                    />
+                    <input type="text" value={modelAlias} onChange={e => setModelAlias(e.target.value)} className="w-full bg-black/50 border border-gray-800 rounded-xl p-3.5 text-white focus:ring-2 focus:ring-brand-500/50 outline-none font-mono text-sm transition-all" />
                     <Terminal size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-700" />
                   </div>
                </div>
+             )}
 
-               <button 
-                 type="submit" 
-                 disabled={loading}
-                 className="w-full bg-brand-600 hover:bg-brand-500 disabled:bg-brand-800 text-white font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-3 shadow-lg shadow-brand-600/20"
-               >
-                 {loading ? <Loader2 className="animate-spin" size={20} /> : <><Download size={18} /> Launch & Connect</>}
-               </button>
-             </form>
-          ) : (
-            <form onSubmit={handleManualConnect} className="space-y-4">
+             {mode === 'ollama' && (
                <div className="space-y-1">
-                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Server Endpoint</label>
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Ollama URL</label>
                   <div className="relative">
-                    <input 
-                      type="text" 
-                      value={customUrl}
-                      onChange={e => setCustomUrl(e.target.value)}
-                      className="w-full bg-black/50 border border-gray-800 rounded-xl p-3.5 text-white focus:ring-2 focus:ring-brand-500/50 outline-none font-mono text-sm"
-                      placeholder="http://127.0.0.1:8000/v1"
-                    />
+                    <input type="text" value={ollamaUrl} onChange={e => setOllamaUrl(e.target.value)} className="w-full bg-black/50 border border-gray-800 rounded-xl p-3.5 text-white focus:ring-2 focus:ring-brand-500/50 outline-none font-mono text-sm" />
+                    <Box size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-700" />
+                  </div>
+               </div>
+             )}
+
+             {mode === 'manual' && (
+               <div className="space-y-1">
+                  <label className="text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">Custom Endpoint</label>
+                  <div className="relative">
+                    <input type="text" value={customUrl} onChange={e => setCustomUrl(e.target.value)} className="w-full bg-black/50 border border-gray-800 rounded-xl p-3.5 text-white focus:ring-2 focus:ring-brand-500/50 outline-none font-mono text-sm" />
                     <Wifi size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-700" />
                   </div>
                </div>
-               <button 
-                 type="submit" 
-                 disabled={loading}
-                 className="w-full bg-gray-800 hover:bg-gray-700 disabled:bg-gray-900 text-white font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-3"
-               >
-                 {loading ? <Loader2 className="animate-spin" size={20} /> : <><Wifi size={18} /> Connect Server</>}
-               </button>
-            </form>
-          )}
+             )}
+
+             <button type="submit" disabled={loading} className="w-full bg-brand-600 hover:bg-brand-500 disabled:bg-brand-800 text-white font-bold py-4 rounded-xl transition-all flex justify-center items-center gap-3 shadow-lg shadow-brand-600/20">
+               {loading ? <Loader2 className="animate-spin" size={20} /> : mode === 'foundry' ? <Download size={18} /> : <Wifi size={18} />} 
+               {loading ? 'Connecting...' : mode === 'foundry' ? 'Launch & Connect' : 'Connect Engine'}
+             </button>
+          </form>
 
           {loading && statusMsg && (
              <p className="mt-4 text-center text-[10px] text-brand-400 font-bold uppercase tracking-widest animate-pulse">{statusMsg}</p>
@@ -204,18 +165,11 @@ const ConnectPage = ({
               <div className="flex-grow border-t border-gray-800/50"></div>
           </div>
 
-          <button 
-              type="button" 
-              onClick={() => {
-                onUpdateSettings({ ...settings, useGeminiDirect: true });
-                onConnect({ id: 'demo-user', username: 'Cloud User', role: 'user' });
-              }}
-              className="w-full group text-gray-500 hover:text-brand-400 font-bold py-2 text-xs transition-all flex justify-center items-center gap-2"
-            >
+          <button type="button" onClick={() => { onUpdateSettings({ ...settings, useGeminiDirect: true, activeProvider: 'gemini' }); onConnect({ id: 'demo-user', username: 'Cloud User', role: 'user' }); }} className="w-full group text-gray-500 hover:text-brand-400 font-bold py-2 text-xs transition-all flex justify-center items-center gap-2">
               <Zap size={14} className="group-hover:fill-brand-400 transition-all" /> Continue with Cloud AI (Gemini)
           </button>
        </div>
-       <p className="mt-8 text-[10px] text-gray-600 font-medium">Built for FoundryLocal Ecosystem</p>
+       <p className="mt-8 text-[10px] text-gray-600 font-medium text-center">FoundryLocal & Ollama Ecosystem</p>
     </div>
   );
 };
@@ -240,8 +194,10 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
     const loadModels = async () => {
        try {
          let fetchedModels: Model[] = [];
-         if (settings.useGeminiDirect) {
+         if (settings.activeProvider === 'gemini') {
            fetchedModels = getGeminiModels();
+         } else if (settings.activeProvider === 'ollama') {
+           fetchedModels = await getOllamaModels(settings.ollamaUrl);
          } else {
            fetchedModels = await getModels(settings.foundryUrl);
          }
@@ -254,7 +210,7 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
        }
     };
     loadModels();
-  }, [settings.useGeminiDirect, settings.foundryUrl]);
+  }, [settings.activeProvider, settings.foundryUrl, settings.ollamaUrl]);
 
   const handleNewChat = () => {
     const newSession: ChatSession = {
@@ -305,7 +261,7 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
       const history = sessions.find(s => s.id === currentSessionId)?.messages || [];
       const fullHistory = [...history, userMsg];
 
-      if (settings.useGeminiDirect) {
+      if (settings.activeProvider === 'gemini') {
         const streamResult = await streamGeminiResponse(selectedModelId, fullHistory, settings.systemPrompt);
         for await (const chunk of streamResult) {
           const text = chunk.text;
@@ -317,6 +273,21 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
           }
         }
         setIsStreaming(false);
+      } else if (settings.activeProvider === 'ollama') {
+        const stopFn = await streamOllamaChat(
+          settings.ollamaUrl,
+          fullHistory,
+          selectedModelId,
+          settings.systemPrompt,
+          (chunk) => {
+            setSessions(curr => curr.map(s => s.id === currentSessionId ? {
+              ...s,
+              messages: s.messages.map(m => m.id === aiMsgId ? { ...m, content: m.content + chunk, isThinking: false } : m)
+            } : s));
+          },
+          () => setIsStreaming(false)
+        );
+        setStopGeneration(() => stopFn);
       } else {
         const stopFn = await streamChat(
           settings.foundryUrl,
@@ -395,19 +366,22 @@ const App = () => {
   const [settings, setSettings] = useState<AppSettings>({
     theme: 'dark',
     foundryUrl: 'http://127.0.0.1:8000/v1',
+    ollamaUrl: 'http://127.0.0.1:11434',
     systemPrompt: 'You are a helpful AI assistant.',
     defaultModel: '',
     enableWebSearch: false,
-    useGeminiDirect: false 
+    useGeminiDirect: false,
+    activeProvider: 'foundry'
   });
 
   return (
-    <Router>
-      <Routes>
-        <Route path="/connect" element={!user ? <ConnectPage onConnect={setUser} settings={settings} onUpdateSettings={setSettings} /> : <Navigate to="/" />} />
-        <Route path="/" element={user ? <Layout user={user} onLogout={() => setUser(null)} settings={settings} setSettings={setSettings} /> : <Navigate to="/connect" />} />
-      </Routes>
-    </Router>
+    <div className="h-screen w-full">
+      {!user ? (
+        <ConnectPage onConnect={setUser} settings={settings} onUpdateSettings={setSettings} />
+      ) : (
+        <Layout user={user} onLogout={() => setUser(null)} settings={settings} setSettings={setSettings} />
+      )}
+    </div>
   );
 };
 

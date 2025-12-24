@@ -39,16 +39,18 @@ export interface User {
 export interface Model {
   id: string;
   name: string;
-  provider: 'foundry' | 'gemini';
+  provider: 'foundry' | 'gemini' | 'ollama';
   description?: string;
   contextWindow?: number;
 }
 
 export interface AppSettings {
   theme: 'dark' | 'light' | 'system';
-  foundryUrl: string; // Base URL for the OpenAI-compatible backend
+  foundryUrl: string; 
+  ollamaUrl: string;
   systemPrompt: string;
   defaultModel: string;
   enableWebSearch: boolean;
   useGeminiDirect: boolean; 
+  activeProvider: 'foundry' | 'ollama' | 'gemini';
 }
