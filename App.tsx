@@ -30,8 +30,14 @@ const ConnectPage = ({
   // Proactively check for local server on mount
   useEffect(() => {
     const checkLocal = async () => {
-      const isFoundryUp = await checkConnection('http://127.0.0.1:8000/v1', 1000);
-      const isOllamaUp = await checkOllamaConnection('http://127.0.0.1:11434');
+      // Check multiple common FoundryLocal ports in parallel alongside Ollama
+      const [foundry5273, foundry8000, foundry8080, isOllamaUp] = await Promise.all([
+        checkConnection('http://127.0.0.1:5273/v1', 1000),
+        checkConnection('http://127.0.0.1:8000/v1', 1000),
+        checkConnection('http://127.0.0.1:8080/v1', 1000),
+        checkOllamaConnection('http://127.0.0.1:11434'),
+      ]);
+      const isFoundryUp = foundry5273 || foundry8000 || foundry8080;
       setLocalServerStatus(isFoundryUp || isOllamaUp ? 'found' : 'not-found');
       if (isOllamaUp && !isFoundryUp) setMode('ollama');
     };

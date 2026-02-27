@@ -1,39 +1,27 @@
 import OpenAI from 'openai';
 import { Model, Message, Role } from "../types";
-import { FoundryLocalManager } from 'foundry-local-sdk'; 
+import { FoundryLocalManager } from 'foundry-local-sdk/browser';
 
 let foundryManager: FoundryLocalManager | null = null;
 
 /**
- * Checks if a URL is responding to a simple health check (models endpoint).
+ * Checks if a URL is responding to a health check on the OpenAI-compatible /v1/models endpoint.
+ * Normalizes the URL to always check the correct path regardless of whether /v1 is included.
  */
 const isServerHealthy = async (url: string, timeout = 2000): Promise<boolean> => {
+  // Normalize: strip trailing slashes and /v1 suffix to get the base service URL
+  const baseUrl = url.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
+  const endpoint = `${baseUrl}/v1/models`;
+
   try {
     const controller = new AbortController();
-    const id = setTimeout(() => controller.abort(), timeout);
-    
-    // Check both /models and /v1/models
-    const cleanUrl = url.replace(/\/$/, "");
-    const endpoints = [`${cleanUrl}/models`, `${cleanUrl}/v1/models`];
-    
-    for (const endpoint of endpoints) {
-      try {
-        const res = await fetch(endpoint, { 
-          method: 'GET', 
-          signal: controller.signal,
-          headers: { 'Authorization': 'Bearer local' } // Default fallback key
-        });
-        if (res.ok || res.status === 401) {
-          clearTimeout(id);
-          return true;
-        }
-      } catch (e) {
-        continue;
-      }
-    }
-    
-    clearTimeout(id);
-    return false;
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    const res = await fetch(endpoint, {
+      method: 'GET',
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    return res.ok || res.status === 401;
   } catch (e) {
     return false;
   }
@@ -41,63 +29,64 @@ const isServerHealthy = async (url: string, timeout = 2000): Promise<boolean> =>
 
 /**
  * Initialize Foundry Local Engine or connect to an existing one.
+ * Scans common ports for a running FoundryLocal service and creates
+ * a browser-compatible SDK manager.
  */
 export const initializeFoundry = async (modelAlias: string = "qwen2.5-coder-0.5b") => {
-  // 1. Proactively check if a server is already running on common local ports
-  // This bypasses the need for the CLI binary if the user started it another way.
-  const commonPorts = ['8000', '11434', '8080'];
+  // Check common ports for a running FoundryLocal service.
+  // Port 5273 is the common FoundryLocal default.
+  // We intentionally exclude 11434 (Ollama's default port) to avoid misdetection.
+  const commonPorts = ['5273', '8000', '8080'];
   const hosts = ['http://127.0.0.1', 'http://localhost'];
-  
+
   for (const host of hosts) {
     for (const port of commonPorts) {
       const url = `${host}:${port}`;
-      if (await isServerHealthy(url, 1000)) {
-        console.log(`Foundry: Found existing server at ${url}`);
+      if (await isServerHealthy(url, 1500)) {
+        console.log(`Foundry: Found existing service at ${url}`);
+
+        // Create browser-compatible SDK manager with the discovered service URL
+        foundryManager = new FoundryLocalManager({ serviceUrl: url });
+
         return {
-          endpoint: url.endsWith('/v1') ? url : `${url}/v1`,
-          apiKey: 'local',
-          modelInfo: { id: modelAlias, name: modelAlias, provider: 'foundry' }
+          endpoint: foundryManager.endpoint, // returns ${serviceUrl}/v1
+          apiKey: foundryManager.apiKey,
+          modelInfo: { id: modelAlias, name: modelAlias, provider: 'foundry' as const }
         };
       }
     }
   }
 
-  // 2. If no server found, attempt to use the SDK to start one
-  try {
-    console.log("Foundry: No existing server found. Attempting SDK initialization...");
-    foundryManager = new FoundryLocalManager();
-    
-    // Note: In a browser environment, manager.init() will likely fail if it 
-    // attempts to execute shell commands via Node.js internals.
-    const modelInfo = await foundryManager.init(modelAlias);
-    
-    return {
-      endpoint: foundryManager.endpoint,
-      apiKey: foundryManager.apiKey,
-      modelInfo: modelInfo
-    };
-  } catch (error: any) {
-    console.warn("Foundry: SDK Initialization failed.", error.message);
-    // Rethrow the specific "not installed" error so the UI can prompt the user
-    throw error;
-  }
+  throw new Error(
+    "No FoundryLocal service detected. Please start FoundryLocal first " +
+    "(e.g. run `foundry service start` in your terminal), then try again."
+  );
 };
 
+/**
+ * Check if a Foundry-compatible server is reachable at the given URL.
+ * Returns the normalized /v1 endpoint URL on success, or null on failure.
+ */
 export const checkConnection = async (baseUrl: string, timeout = 3000): Promise<string | null> => {
   const healthy = await isServerHealthy(baseUrl, timeout);
   if (healthy) {
-    return baseUrl.endsWith('/v1') ? baseUrl : `${baseUrl.replace(/\/$/, "")}/v1`;
+    const cleanUrl = baseUrl.replace(/\/+$/, "").replace(/\/v1\/?$/, "");
+    return `${cleanUrl}/v1`;
   }
   return null;
 };
 
+/**
+ * Fetch available models from the Foundry-compatible server.
+ */
 export const getModels = async (baseUrl: string): Promise<Model[]> => {
   try {
-    const authKey = foundryManager?.apiKey || 'local';
-    const response = await fetch(`${baseUrl}/models`, {
+    const cleanUrl = baseUrl.replace(/\/+$/, "");
+    const authKey = foundryManager?.apiKey || 'OPENAI_API_KEY';
+    const response = await fetch(`${cleanUrl}/models`, {
       headers: { 'Authorization': `Bearer ${authKey}` }
     });
-    
+
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const data = await response.json();
     const list = data.data || data;
@@ -105,10 +94,10 @@ export const getModels = async (baseUrl: string): Promise<Model[]> => {
     if (Array.isArray(list)) {
       return list.map((m: any) => ({
         id: m.id,
-        name: m.id, 
-        provider: 'foundry',
+        name: m.id,
+        provider: 'foundry' as const,
         description: 'Local LLM',
-        contextWindow: m.context_window || 4096 
+        contextWindow: m.context_window || 4096
       }));
     }
     return [];
@@ -118,6 +107,10 @@ export const getModels = async (baseUrl: string): Promise<Model[]> => {
   }
 };
 
+/**
+ * Stream a chat completion from the Foundry-compatible server using OpenAI SDK.
+ * Returns an abort function to cancel the stream.
+ */
 export const streamChat = async (
   baseUrl: string,
   messages: Message[],
@@ -128,12 +121,13 @@ export const streamChat = async (
   onComplete: () => void
 ): Promise<() => void> => {
   const controller = new AbortController();
-  const authKey = foundryManager?.apiKey || 'local';
-  
+  const cleanUrl = baseUrl.replace(/\/+$/, "");
+  const authKey = foundryManager?.apiKey || 'OPENAI_API_KEY';
+
   const client = new OpenAI({
-    baseURL: baseUrl,
+    baseURL: cleanUrl,
     apiKey: authKey,
-    dangerouslyAllowBrowser: true 
+    dangerouslyAllowBrowser: true
   });
 
   const openAIMessages: any[] = [
