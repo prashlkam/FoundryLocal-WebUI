@@ -32,10 +32,35 @@ const isServerHealthy = async (url: string, timeout = 2000): Promise<boolean> =>
  * Scans common ports for a running FoundryLocal service and creates
  * a browser-compatible SDK manager.
  */
+/**
+ * Ask the Vite dev server for the actual FoundryLocal service URL
+ * by running `foundry service status` in the background.
+ */
+const getFoundryUrlFromStatus = async (): Promise<string | null> => {
+  try {
+    const res = await fetch('/api/foundry-status');
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data.url ?? null;
+  } catch {
+    return null;
+  }
+};
+
 export const initializeFoundry = async (modelAlias: string = "qwen2.5-coder-0.5b") => {
-  // Check common ports for a running FoundryLocal service.
-  // Port 5273 is the common FoundryLocal default.
-  // We intentionally exclude 11434 (Ollama's default port) to avoid misdetection.
+  // First, ask the Vite server to run `foundry service status` and return the actual URL.
+  const statusUrl = await getFoundryUrlFromStatus();
+  if (statusUrl && await isServerHealthy(statusUrl, 2000)) {
+    console.log(`Foundry: Service detected via status at ${statusUrl}`);
+    foundryManager = new FoundryLocalManager({ serviceUrl: statusUrl });
+    return {
+      endpoint: foundryManager.endpoint,
+      apiKey: foundryManager.apiKey,
+      modelInfo: { id: modelAlias, name: modelAlias, provider: 'foundry' as const }
+    };
+  }
+
+  // Fall back to scanning common ports.
   const commonPorts = ['5273', '8000', '8080'];
   const hosts = ['http://127.0.0.1', 'http://localhost'];
 
@@ -44,12 +69,9 @@ export const initializeFoundry = async (modelAlias: string = "qwen2.5-coder-0.5b
       const url = `${host}:${port}`;
       if (await isServerHealthy(url, 1500)) {
         console.log(`Foundry: Found existing service at ${url}`);
-
-        // Create browser-compatible SDK manager with the discovered service URL
         foundryManager = new FoundryLocalManager({ serviceUrl: url });
-
         return {
-          endpoint: foundryManager.endpoint, // returns ${serviceUrl}/v1
+          endpoint: foundryManager.endpoint,
           apiKey: foundryManager.apiKey,
           modelInfo: { id: modelAlias, name: modelAlias, provider: 'foundry' as const }
         };
