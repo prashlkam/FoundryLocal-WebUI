@@ -137,7 +137,6 @@ export const streamChat = async (
   baseUrl: string,
   messages: Message[],
   modelId: string,
-  attachments: File[] | undefined,
   systemPrompt: string,
   onChunk: (text: string) => void,
   onComplete: () => void
@@ -154,10 +153,41 @@ export const streamChat = async (
 
   const openAIMessages: any[] = [
     { role: 'system', content: systemPrompt },
-    ...messages.map(m => ({
-      role: m.role === Role.MODEL ? 'assistant' : m.role,
-      content: m.content
-    }))
+    ...messages.map(m => {
+      const role = m.role === Role.MODEL ? 'assistant' : m.role;
+      const attachments = m.attachments;
+
+      // If no attachments, send plain text
+      if (!attachments || attachments.length === 0) {
+        return { role, content: m.content };
+      }
+
+      // Build multimodal content array
+      const contentParts: any[] = [];
+
+      // Add file contents as text context
+      for (const att of attachments) {
+        if (att.type === 'image' && att.data) {
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url: `data:${att.mimeType || 'image/png'};base64,${att.data}` }
+          });
+        } else if (att.type === 'file' && att.data) {
+          // Prepend file content as text context
+          contentParts.push({
+            type: 'text',
+            text: `[File: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\``
+          });
+        }
+      }
+
+      // Add the user's text message
+      if (m.content) {
+        contentParts.push({ type: 'text', text: m.content });
+      }
+
+      return { role, content: contentParts };
+    })
   ];
 
   (async () => {

@@ -19,6 +19,28 @@ export const streamGeminiResponse = async (
   
   const chatModel = modelId.includes('gemini') ? modelId : 'gemini-2.5-flash';
 
+  const buildParts = (msg: Message): any[] => {
+    const parts: any[] = [];
+    if (msg.attachments && msg.attachments.length > 0) {
+      for (const att of msg.attachments) {
+        if (att.type === 'image' && att.data) {
+          parts.push({
+            inlineData: {
+              mimeType: att.mimeType || 'image/png',
+              data: att.data,
+            }
+          });
+        } else if (att.type === 'file' && att.data) {
+          parts.push({ text: `[File: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`` });
+        }
+      }
+    }
+    if (msg.content) {
+      parts.push({ text: msg.content });
+    }
+    return parts.length > 0 ? parts : [{ text: '' }];
+  };
+
   const chat = ai.chats.create({
     model: chatModel,
     config: {
@@ -26,22 +48,20 @@ export const streamGeminiResponse = async (
     },
     history: history.slice(0, -1).map(msg => ({
       role: msg.role === Role.USER ? 'user' : 'model',
-      parts: [{ text: msg.content }]
+      parts: buildParts(msg),
     })),
   });
 
   const lastMessage = history[history.length - 1];
-  
+
   if (!lastMessage || lastMessage.role !== Role.USER) {
     throw new Error("Last message must be from user");
   }
 
-  // Handle attachments if present in the last message
-  // This is a simplified implementation assuming text-only or basic image support for now
-  // For full implementation we would parse attachments into `inlineData`.
-  
+  const lastParts = buildParts(lastMessage);
+
   const result = await chat.sendMessageStream({
-    message: lastMessage.content
+    message: lastParts,
   });
 
   return result;

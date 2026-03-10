@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>FoundryLocal WebUI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        darkMode: 'class',
+        theme: {
+          extend: {
+            colors: {
+              gray: {
+                750: '#2d2d35',
+                850: '#1a1a20',
+                950: '#0d0d10',
+              },
+              brand: {
+                500: '#3b82f6',
+                600: '#2563eb',
+              }
+            },
+            typography: (theme) => ({
+              DEFAULT: {
+                css: {
+                  color: theme('colors.gray.300'),
+                  a: {
+                    color: theme('colors.brand.500'),
+                    '&:hover': {
+                      color: theme('colors.brand.600'),
+                    },
+                  },
+                  code: {
+                    color: theme('colors.gray.100'),
+                    backgroundColor: theme('colors.gray.800'),
+                    padding: '2px 4px',
+                    borderRadius: '4px',
+                  },
+                  'code::before': { content: '""' },
+                  'code::after': { content: '""' },
+                },
+              },
+            }),
+          },
+        },
+      }
+    </script>
+    <style>
+      /* Custom Scrollbar for Webkit */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent; 
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #4b5563; 
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #6b7280; 
+      }
+    </style>
+  <script type="module" crossorigin src="/assets/index-DFi8tULb.js"></script>
+</head>
+  <body class="bg-gray-950 text-gray-100 font-sans antialiased overflow-hidden selection:bg-brand-500 selection:text-white">
+    <div id="root"></div>
+  </body>
+</html>

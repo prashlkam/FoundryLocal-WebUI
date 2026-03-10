@@ -16,8 +16,9 @@ export interface Message {
 export interface Attachment {
   name: string;
   type: 'image' | 'file' | 'link';
+  mimeType?: string;
   url?: string;
-  data?: string; // base64
+  data?: string; // base64 (without data URI prefix)
 }
 
 export interface ChatSession {

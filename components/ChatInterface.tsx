@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Message, Role, Model, AppSettings } from '../types';
-import { Send, Paperclip, Globe, StopCircle, Bot, User, BrainCircuit, X } from 'lucide-react';
+import { Send, Paperclip, Globe, StopCircle, Bot, User, BrainCircuit, X, Copy, Check, ThumbsUp, ThumbsDown, RotateCcw, FileText, Image as ImageIcon } from 'lucide-react';
 
 interface ChatInterfaceProps {
   messages: Message[];
@@ -33,6 +33,21 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(settings.enableWebSearch);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [ratedMessages, setRatedMessages] = useState<Record<string, 'up' | 'down'>>({});
+
+  const handleCopy = async (content: string, msgId: string) => {
+    await navigator.clipboard.writeText(content);
+    setCopiedId(msgId);
+    setTimeout(() => setCopiedId(null), 2000);
+  };
+
+  const handleRate = (msgId: string, rating: 'up' | 'down') => {
+    setRatedMessages(prev => ({
+      ...prev,
+      [msgId]: prev[msgId] === rating ? undefined! : rating,
+    }));
+  };
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -135,12 +150,33 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               </div>
               
               <div className={`px-4 py-3 rounded-2xl ${
-                msg.role === Role.USER 
-                  ? 'bg-gray-800 text-white rounded-tr-sm' 
-                  : 'bg-transparent text-gray-100 px-0' 
+                msg.role === Role.USER
+                  ? 'bg-gray-800 text-white rounded-tr-sm'
+                  : 'bg-transparent text-gray-100 px-0'
               }`}>
                  {msg.role === Role.USER ? (
-                   <div className="whitespace-pre-wrap text-sm">{msg.content}</div>
+                   <div className="text-sm">
+                     {msg.attachments && msg.attachments.length > 0 && (
+                       <div className="flex flex-wrap gap-2 mb-2">
+                         {msg.attachments.map((att, i) => (
+                           att.type === 'image' && att.data ? (
+                             <img
+                               key={i}
+                               src={`data:${att.mimeType || 'image/png'};base64,${att.data}`}
+                               alt={att.name}
+                               className="max-w-[200px] max-h-[150px] rounded-lg object-cover"
+                             />
+                           ) : (
+                             <div key={i} className="flex items-center gap-1.5 bg-gray-700/50 px-2.5 py-1.5 rounded-lg text-xs text-gray-300">
+                               <FileText size={12} />
+                               <span className="truncate max-w-[120px]">{att.name}</span>
+                             </div>
+                           )
+                         ))}
+                       </div>
+                     )}
+                     <div className="whitespace-pre-wrap">{msg.content}</div>
+                   </div>
                  ) : (
                    <div className="prose prose-invert prose-sm max-w-none">
                      <ReactMarkdown
@@ -170,6 +206,41 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
                    </div>
                  )}
               </div>
+
+              {/* Action bar for assistant messages */}
+              {msg.role !== Role.USER && !isStreaming && msg.content && (
+                <div className="flex items-center gap-1 mt-1 -ml-1">
+                  <button
+                    onClick={() => handleCopy(msg.content, msg.id)}
+                    className="p-1.5 text-gray-500 hover:text-gray-300 hover:bg-gray-800 rounded-lg transition-colors"
+                    title="Copy response"
+                  >
+                    {copiedId === msg.id ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+                  </button>
+                  <button
+                    onClick={() => handleRate(msg.id, 'up')}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      ratedMessages[msg.id] === 'up'
+                        ? 'text-green-400 bg-green-900/20'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                    }`}
+                    title="Good response"
+                  >
+                    <ThumbsUp size={14} />
+                  </button>
+                  <button
+                    onClick={() => handleRate(msg.id, 'down')}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      ratedMessages[msg.id] === 'down'
+                        ? 'text-red-400 bg-red-900/20'
+                        : 'text-gray-500 hover:text-gray-300 hover:bg-gray-800'
+                    }`}
+                    title="Bad response"
+                  >
+                    <ThumbsDown size={14} />
+                  </button>
+                </div>
+              )}
             </div>
 
             {msg.role === Role.USER && (
@@ -204,6 +275,15 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({
               <div className="flex gap-2 mb-2 overflow-x-auto pb-2">
                 {attachments.map((file, idx) => (
                   <div key={idx} className="flex items-center gap-2 bg-gray-800 px-3 py-1.5 rounded-lg border border-gray-700 text-xs text-gray-200">
+                    {file.type.startsWith('image/') ? (
+                      <img
+                        src={URL.createObjectURL(file)}
+                        alt={file.name}
+                        className="w-8 h-8 rounded object-cover flex-shrink-0"
+                      />
+                    ) : (
+                      <FileText size={14} className="text-gray-400 flex-shrink-0" />
+                    )}
                     <span className="truncate max-w-[150px]">{file.name}</span>
                     <button onClick={() => removeAttachment(idx)} className="text-gray-400 hover:text-white">
                       <X size={14} />

@@ -39,10 +39,28 @@ export const streamOllamaChat = async (
 
   const formattedMessages = [
     { role: 'system', content: systemPrompt },
-    ...messages.map(m => ({
-      role: m.role === Role.MODEL ? 'assistant' : m.role,
-      content: m.content
-    }))
+    ...messages.map(m => {
+      const role = m.role === Role.MODEL ? 'assistant' : m.role;
+      const attachments = m.attachments;
+      let content = m.content;
+      const images: string[] = [];
+
+      if (attachments && attachments.length > 0) {
+        for (const att of attachments) {
+          if (att.type === 'image' && att.data) {
+            // Ollama expects raw base64 strings in the images array
+            images.push(att.data);
+          } else if (att.type === 'file' && att.data) {
+            // Prepend file content as text context
+            content = `[File: ${att.name}]\n\`\`\`\n${att.data}\n\`\`\`\n\n${content}`;
+          }
+        }
+      }
+
+      const msg: any = { role, content };
+      if (images.length > 0) msg.images = images;
+      return msg;
+    })
   ];
 
   (async () => {

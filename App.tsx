@@ -5,7 +5,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { checkConnection, streamChat, getModels, initializeFoundry } from './services/foundryService';
 import { checkOllamaConnection, getOllamaModels, streamOllamaChat } from './services/ollamaService';
 import { streamGeminiResponse, getGeminiModels } from './services/geminiService';
-import { ChatSession, User, Message, Role, Model, AppSettings } from './types';
+import { ChatSession, User, Message, Role, Model, AppSettings, Attachment } from './types';
 import { BrainCircuit, Loader2, Wifi, WifiOff, Zap, AlertTriangle, Download, Terminal, Copy, CheckCircle2, Box } from 'lucide-react';
 
 // --- Connection Component ---
@@ -234,15 +234,77 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
     if (sessions.length === 0) handleNewChat();
   }, []);
 
+  const readFileAsBase64 = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        // Strip the data URI prefix (e.g. "data:image/png;base64,")
+        const base64 = result.split(',')[1];
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const readFileAsText = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result as string);
+      reader.onerror = reject;
+      reader.readAsText(file);
+    });
+  };
+
+  const processAttachments = async (files: File[]): Promise<Attachment[]> => {
+    const processed: Attachment[] = [];
+    for (const file of files) {
+      const isImage = file.type.startsWith('image/');
+      if (isImage) {
+        const base64 = await readFileAsBase64(file);
+        processed.push({
+          name: file.name,
+          type: 'image',
+          mimeType: file.type,
+          data: base64,
+        });
+      } else {
+        // Read text-based files as text content
+        try {
+          const text = await readFileAsText(file);
+          processed.push({
+            name: file.name,
+            type: 'file',
+            mimeType: file.type || 'text/plain',
+            data: text,
+          });
+        } catch {
+          // For binary files we can't read as text, store as base64
+          const base64 = await readFileAsBase64(file);
+          processed.push({
+            name: file.name,
+            type: 'file',
+            mimeType: file.type || 'application/octet-stream',
+            data: base64,
+          });
+        }
+      }
+    }
+    return processed;
+  };
+
   const handleSendMessage = async (content: string, attachments: File[] = []) => {
     if (!currentSessionId) return;
+
+    const processedAttachments = attachments.length > 0 ? await processAttachments(attachments) : [];
 
     const userMsg: Message = {
       id: Date.now().toString(),
       role: Role.USER,
       content,
       timestamp: Date.now(),
-      attachments: attachments.map(f => ({ name: f.name, type: 'file' }))
+      attachments: processedAttachments.length > 0 ? processedAttachments : undefined
     };
 
     setSessions(prev => prev.map(s => s.id === currentSessionId ? { 
@@ -267,16 +329,19 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
       const history = sessions.find(s => s.id === currentSessionId)?.messages || [];
       const fullHistory = [...history, userMsg];
 
+      const onChunkHandler = (chunk: string) => {
+        setSessions(curr => curr.map(s => s.id === currentSessionId ? {
+          ...s,
+          messages: s.messages.map(m => m.id === aiMsgId ? { ...m, content: m.content + chunk, isThinking: false } : m)
+        } : s));
+      };
+      const onCompleteHandler = () => setIsStreaming(false);
+
       if (settings.activeProvider === 'gemini') {
         const streamResult = await streamGeminiResponse(selectedModelId, fullHistory, settings.systemPrompt);
         for await (const chunk of streamResult) {
           const text = chunk.text;
-          if (text) {
-            setSessions(curr => curr.map(s => s.id === currentSessionId ? {
-              ...s,
-              messages: s.messages.map(m => m.id === aiMsgId ? { ...m, content: m.content + text, isThinking: false } : m)
-            } : s));
-          }
+          if (text) onChunkHandler(text);
         }
         setIsStreaming(false);
       } else if (settings.activeProvider === 'ollama') {
@@ -285,13 +350,8 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
           fullHistory,
           selectedModelId,
           settings.systemPrompt,
-          (chunk) => {
-            setSessions(curr => curr.map(s => s.id === currentSessionId ? {
-              ...s,
-              messages: s.messages.map(m => m.id === aiMsgId ? { ...m, content: m.content + chunk, isThinking: false } : m)
-            } : s));
-          },
-          () => setIsStreaming(false)
+          onChunkHandler,
+          onCompleteHandler
         );
         setStopGeneration(() => stopFn);
       } else {
@@ -299,15 +359,9 @@ const Layout = ({ user, onLogout, settings, setSettings }: {
           settings.foundryUrl,
           fullHistory,
           selectedModelId,
-          attachments,
           settings.systemPrompt,
-          (chunk) => {
-            setSessions(curr => curr.map(s => s.id === currentSessionId ? {
-              ...s,
-              messages: s.messages.map(m => m.id === aiMsgId ? { ...m, content: m.content + chunk, isThinking: false } : m)
-            } : s));
-          },
-          () => setIsStreaming(false)
+          onChunkHandler,
+          onCompleteHandler
         );
         setStopGeneration(() => stopFn);
       }
